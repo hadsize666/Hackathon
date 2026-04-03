@@ -221,19 +221,16 @@ def process_ai_logic(payload):
     found_dists, found_params = extract_entities_multi(user_query, districts_list, parameters)
     intent = get_intent(user_query)
 
-    is_comparison_context = any(word in user_query for word in ["перед", "чем", "сравнению", "против"])
+    is_comparison_context = any(word in user_query for word in ["перед", "чем", "сравнению", "против", "сравни"])
     
-    if is_comparison_context and json_district and found_dists:
-        primary_dist = json_district
-        secondary_dist = found_dists[0]
-        if primary_dist != secondary_dist:
-            res = f"🧐 Сравниваю преимущества **{primary_dist}** перед **{secondary_dist}**:\n"
+    if is_comparison_context or intent['tag'] == 'comparison' or len(found_dists) >= 2:
+        dists_to_compare = found_dists if len(found_dists) >= 2 else ([json_district, found_dists[0]] if json_district and found_dists else [])
+        if len(dists_to_compare) >= 2:
+            res = random.choice(intent['responses']) if intent['tag'] == 'comparison' else "📊 Сравниваю показатели:\n"
             if not found_params:
-                res += analyze_advantages(primary_dist, all_sheets)
-                res += f"\n\nДля сравнения с {secondary_dist} по конкретным цифрам укажите категорию (например, транспорт)."
-            else:
-                for p_obj in found_params:
-                    res += compare_multi_logic([primary_dist, secondary_dist], p_obj, all_sheets)
+                res += "Уточните параметр для детального сравнения (например, 'по газопроводу')."
+            for p_obj in found_params:
+                res += compare_multi_logic(dists_to_compare, p_obj, all_sheets)
             return res
 
     target_district = found_dists[0] if found_dists else json_district
@@ -249,17 +246,6 @@ def process_ai_logic(payload):
             prefix = random.choice(intent['responses'])
             return f"{prefix}\n\n{analyze_advantages(target_district, all_sheets)}"
         return "Укажите район."
-
-    if intent['tag'] == 'comparison' or len(found_dists) >= 2:
-        dists_to_compare = found_dists if len(found_dists) >= 2 else ([json_district, found_dists[0]] if json_district and found_dists else [])
-        if len(dists_to_compare) >= 2:
-            res = random.choice(intent['responses']) + "\n"
-            if not found_params:
-                res += "Уточните параметр для детального сравнения (например, 'по экологии')."
-            for p_obj in found_params:
-                res += compare_multi_logic(dists_to_compare, p_obj, all_sheets)
-            return res
-        return "Для сравнения нужно 2 района."
 
     return f"Я определил район **{target_district}**. Что вы хотите узнать?"
 
