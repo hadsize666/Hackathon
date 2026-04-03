@@ -45,7 +45,8 @@ def load_all_data():
         for sheet_name, df in sheets.items():
             all_districts.update(df.iloc[:, 0].dropna().unique())
             for col in df.columns[1:]:
-                params_list.append({'sheet': sheet_name, 'column': col})
+                if "unnamed" not in str(col).lower():
+                    params_list.append({'sheet': sheet_name, 'column': col})
         dist_list = sorted(list(all_districts))
     except Exception as e:
         st.error(f"Файл City_Data_Summary.xlsx не найден. Ошибка: {e}")
@@ -119,19 +120,35 @@ def extract_entities_multi(user_text, districts, params):
         if len(final_params) >= MAX_LIMIT: break
     return final_districts, final_params
 
+def is_ignored_metric(col_name):
+    ignored = ['итого', 'всего', 'в работе', 'конкурс', 'другое', 'прочее', 'unnamed', 'статус']
+    return any(kw in str(col_name).lower() for kw in ignored)
+
+def is_negative_metric(sheet_name, col_name):
+    neg_keywords = [
+        'краж', 'преступ', 'дтп', 'авари', 'жалоб', 'шум', 'загрязн', 
+        'безработ', 'нарушен', 'смерт', 'убийст', 'грабеж', 'наркот', 
+        'мошеннич', 'хулиган', 'насил', 'корруп', 'ущерб', 'пожар', 
+        'травм', 'опасн', 'суицид', 'разбой', 'вымогател', 'угон',
+        'правонаруш', 'инцидент', 'болезн', 'заболеван', 'криминал',
+        'истек', 'просроч', 'отложен', 'отмен', 'долг', 'задолжен'
+    ]
+    text_to_check = f"{sheet_name} {col_name}".lower()
+    return any(kw in text_to_check for kw in neg_keywords)
+
 def compare_multi_logic(districts_names, target_param, sheets):
     df = sheets[target_param['sheet']]
     data = []
     for d_name in districts_names:
         try:
             val = float(df[df.iloc[:, 0] == d_name][target_param['column']].values[0])
+            if pd.isna(val): continue
             data.append({"name": d_name, "val": val})
         except: continue
 
     if not data: return ""
     
-    neg_keywords = ['краж', 'преступ', 'дтп', 'авари', 'жалоб', 'шум', 'загрязнен', 'безработиц', 'нарушен', 'смерт']
-    is_neg = any(kw in target_param['column'].lower() for kw in neg_keywords)
+    is_neg = is_negative_metric(target_param['sheet'], target_param['column'])
     
     data = sorted(data, key=lambda x: x['val'], reverse=not is_neg)
     output = f"\n📊 **Параметр: '{target_param['column']}'**\n"
@@ -146,19 +163,66 @@ def compare_multi_logic(districts_names, target_param, sheets):
         output += line + "\n"
     return output
 
+def analyze_comparison_general(dist1, dist2, sheets, mode="all"):
+    all_data = []
+    for sheet_name, df in sheets.items():
+        if dist1 in df.iloc[:, 0].values and dist2 in df.iloc[:, 0].values:
+            row1 = df[df.iloc[:, 0] == dist1]
+            row2 = df[df.iloc[:, 0] == dist2]
+            for col in df.columns[1:]:
+                if is_ignored_metric(col): continue
+                try:
+                    val1 = float(row1[col].values[0])
+                    val2 = float(row2[col].values[0])
+                    if pd.isna(val1) or pd.isna(val2): continue
+                    
+                    is_neg = is_negative_metric(sheet_name, col)
+                    diff = (val2 - val1) if is_neg else (val1 - val2)
+                    all_data.append({"param": col, "val1": val1, "val2": val2, "diff": diff, "is_neg": is_neg})
+                except: continue
+
+    if not all_data: return "Недостаточно данных для сравнения этих районов."
+    
+    sorted_data = sorted(all_data, key=lambda x: x['diff'], reverse=True)
+    res = f"📝 **Сравнение: {dist1} против {dist2}**\n"
+    
+    if mode in ["all", "positive"]:
+        res += f"\n✅ **В чем {dist1} обходит конкурента:**\n"
+        count = 0
+        for item in sorted_data:
+            if item['diff'] > 0 and not item['is_neg']:
+                res += f"- Выше показатель \"{item['param']}\": {item['val1']} против {item['val2']}\n"
+                count += 1
+            if count >= 3: break
+        if count == 0: res += "- Явных преимуществ не найдено.\n"
+                
+    if mode in ["all", "negative"]:
+        res += f"\n⚠️ **В чем {dist1} уступает:**\n"
+        count = 0
+        for item in sorted_data[::-1]:
+            if item['diff'] < 0:
+                if item['is_neg']:
+                    res += f"- Хуже ситуация с \"{item['param']}\": {item['val1']} против {item['val2']}\n"
+                else:
+                    res += f"- Ниже показатель \"{item['param']}\": {item['val1']} против {item['val2']}\n"
+                count += 1
+            if count >= 3: break
+        if count == 0: res += "- Явных отставаний не найдено.\n"
+    return res
+
 def analyze_specific(district_name, sheets, mode="all"):
     all_data = []
-    neg_keywords = ['краж', 'преступ', 'дтп', 'авари', 'жалоб', 'шум', 'загрязнен', 'безработиц', 'нарушен', 'смерт']
-    
     for sheet_name, df in sheets.items():
         if district_name in df.iloc[:, 0].values:
             row = df[df.iloc[:, 0] == district_name]
             for col in df.columns[1:]:
+                if is_ignored_metric(col): continue
                 try:
                     val = float(row[col].values[0])
                     avg = df[col].mean()
-                    is_neg = any(kw in col.lower() for kw in neg_keywords)
+                    if pd.isna(val) or pd.isna(avg): continue
                     
+                    is_neg = is_negative_metric(sheet_name, col)
                     diff = (avg - val) if is_neg else (val - avg)
                     all_data.append({"param": col, "val": val, "diff": diff, "is_neg": is_neg})
                 except: continue
@@ -169,20 +233,27 @@ def analyze_specific(district_name, sheets, mode="all"):
     res = f"📝 **Анализ района: {district_name}**\n"
     
     if mode in ["all", "positive"]:
-        res += "\n✅ **Сильные стороны:**\n"
-        for item in sorted_data[:3]:
-            if item['is_neg']:
-                res += f"- {item['param']}: {item['val']} (лучше среднего на {round(abs(item['diff']), 1)})\n"
-            else:
-                res += f"- {item['param']}: {item['val']} (+{round(item['diff'], 1)} к среднему)\n"
+        res += "\n✅ **Сильные стороны (преимущества):**\n"
+        count = 0
+        for item in sorted_data:
+            if item['diff'] > 0 and not item['is_neg']:
+                res += f"- Высокий показатель \"{item['param']}\": {item['val']} (+{round(item['diff'], 1)} к среднему)\n"
+                count += 1
+            if count >= 3: break
+        if count == 0: res += "- Выдающихся положительных метрик не найдено.\n"
                 
     if mode in ["all", "negative"]:
-        res += "\n⚠️ **Зоны роста (недостатки):**\n"
-        for item in sorted_data[-3:][::-1]:
-            if item['is_neg']:
-                res += f"- {item['param']}: {item['val']} (хуже среднего на {round(abs(item['diff']), 1)})\n"
-            else:
-                res += f"- {item['param']}: {item['val']} (-{round(abs(item['diff']), 1)} от среднего)\n"
+        res += "\n⚠️ **Слабые стороны (зоны роста):**\n"
+        count = 0
+        for item in sorted_data[::-1]:
+            if item['diff'] < 0:
+                if item['is_neg']:
+                    res += f"- Проблема (высокий уровень) с \"{item['param']}\": {item['val']} (хуже среднего на {round(abs(item['diff']), 1)})\n"
+                else:
+                    res += f"- Отставание по \"{item['param']}\": {item['val']} (-{round(abs(item['diff']), 1)} от среднего)\n"
+                count += 1
+            if count >= 3: break
+        if count == 0: res += "- Критичных проблем не выявлено.\n"
     return res
 
 with st.sidebar:
@@ -243,40 +314,48 @@ def process_ai_logic(payload):
     found_dists, found_params = extract_entities_multi(user_query, districts_list, parameters)
     intent = get_intent(user_query)
 
+    pos_words = ["плюс", "преимуществ", "сильн", "положительн", "достоинств", "хорош", "лучше", "превосход", "обход", "выигрыва"]
+    neg_words = ["минус", "недостатк", "хуже", "плох", "отрицательн", "косяк", "проблем", "слаб", "улучш", "рекомендац", "уступа", "проигрыва", "отстает"]
+
     is_comparison_context = any(word in user_query for word in ["перед", "чем", "сравнению", "против", "сравни"])
     
     if is_comparison_context or intent['tag'] == 'comparison' or len(found_dists) >= 2:
         dists_to_compare = found_dists if len(found_dists) >= 2 else ([json_district, found_dists[0]] if json_district and found_dists else [])
         if len(dists_to_compare) >= 2:
-            res = random.choice(intent['responses']) if intent['tag'] == 'comparison' else "📊 Сравниваю показатели:\n"
             if not found_params:
-                if any(word in user_query for word in ["плюс", "преимуществ", "лучше", "хорош", "сильные"]):
-                    res += f"\nОсновные преимущества района {dists_to_compare[0]}:\n"
-                    res += analyze_specific(dists_to_compare[0], all_sheets, mode="positive")
-                elif any(word in user_query for word in ["минус", "недостатк", "хуже", "плохо", "отрицательн", "косяк", "проблем"]):
-                    res += f"\nСлабые стороны района {dists_to_compare[0]}:\n"
-                    res += analyze_specific(dists_to_compare[0], all_sheets, mode="negative")
+                has_pos = any(word in user_query for word in pos_words)
+                has_neg = any(word in user_query for word in neg_words)
+                
+                if has_pos and not has_neg:
+                    return analyze_comparison_general(dists_to_compare[0], dists_to_compare[1], all_sheets, mode="positive")
+                elif has_neg and not has_pos:
+                    return analyze_comparison_general(dists_to_compare[0], dists_to_compare[1], all_sheets, mode="negative")
                 else:
-                    res += "Уточните параметр для детального сравнения (например, 'по газопроводу')."
+                    return analyze_comparison_general(dists_to_compare[0], dists_to_compare[1], all_sheets, mode="all")
             else:
+                res = "📊 Сравниваю показатели:\n"
                 for p_obj in found_params:
                     res += compare_multi_logic(dists_to_compare, p_obj, all_sheets)
-            return res
+                return res
 
     target_district = found_dists[0] if found_dists else json_district
 
-    if any(word in user_query for word in ["плюс", "преимуществ", "лучше", "хорош", "сильные"]):
+    has_pos = any(word in user_query for word in pos_words)
+    has_neg = any(word in user_query for word in neg_words)
+
+    if has_pos and not has_neg:
         return analyze_specific(target_district, all_sheets, mode="positive")
-    
-    if any(word in user_query for word in ["минус", "недостатк", "хуже", "плохо", "отрицательн", "косяк", "проблем"]):
+    elif has_neg and not has_pos:
         return analyze_specific(target_district, all_sheets, mode="negative")
+    elif has_pos and has_neg:
+        return analyze_specific(target_district, all_sheets, mode="all")
 
     if intent['tag'] == 'advantages':
         if target_district:
             return analyze_specific(target_district, all_sheets, mode="all")
         return "Укажите район для анализа."
 
-    if intent['tag'] == 'improvement' or "улучшить" in user_query:
+    if intent['tag'] == 'improvement':
         if target_district:
             return analyze_specific(target_district, all_sheets, mode="negative")
         return "Укажите район."
