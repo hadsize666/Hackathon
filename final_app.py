@@ -129,20 +129,27 @@ def compare_multi_logic(districts_names, target_param, sheets):
         except: continue
 
     if not data: return ""
-    data = sorted(data, key=lambda x: x['val'], reverse=True)
+    
+    neg_keywords = ['краж', 'преступ', 'дтп', 'авари', 'жалоб', 'шум', 'загрязнен', 'безработиц', 'нарушен', 'смерт']
+    is_neg = any(kw in target_param['column'].lower() for kw in neg_keywords)
+    
+    data = sorted(data, key=lambda x: x['val'], reverse=not is_neg)
     output = f"\n📊 **Параметр: '{target_param['column']}'**\n"
     leader = data[0]
     for i, item in enumerate(data):
         marker = "🏆" if i == 0 else "📍"
         line = f"{marker} {item['name']}: {item['val']}"
         if i > 0 and item['val'] != 0:
-            diff = round(((leader['val'] - item['val']) / item['val']) * 100, 2)
-            line += f" (лидер выше на {diff}%)"
+            diff = round((abs(leader['val'] - item['val']) / item['val']) * 100, 2)
+            word = "лучше" if is_neg else "выше"
+            line += f" (лидер {word} на {diff}%)"
         output += line + "\n"
     return output
 
-def analyze_advantages(district_name, sheets):
+def analyze_specific(district_name, sheets, mode="all"):
     all_data = []
+    neg_keywords = ['краж', 'преступ', 'дтп', 'авари', 'жалоб', 'шум', 'загрязнен', 'безработиц', 'нарушен', 'смерт']
+    
     for sheet_name, df in sheets.items():
         if district_name in df.iloc[:, 0].values:
             row = df[df.iloc[:, 0] == district_name]
@@ -150,17 +157,32 @@ def analyze_advantages(district_name, sheets):
                 try:
                     val = float(row[col].values[0])
                     avg = df[col].mean()
-                    all_data.append({"param": col, "val": val, "diff": val - avg})
+                    is_neg = any(kw in col.lower() for kw in neg_keywords)
+                    
+                    diff = (avg - val) if is_neg else (val - avg)
+                    all_data.append({"param": col, "val": val, "diff": diff, "is_neg": is_neg})
                 except: continue
 
     if not all_data: return "Данные по району не найдены."
+    
     sorted_data = sorted(all_data, key=lambda x: x['diff'], reverse=True)
-    res = f"📝 **Анализ района: {district_name}**\n\n✅ **Сильные стороны:**\n"
-    for item in sorted_data[:3]:
-        res += f"- {item['param']}: {item['val']} (+{round(item['diff'], 1)} к среднему)\n"
-    res += "\n⚠️ **Зоны роста:**\n"
-    for item in sorted_data[-3:][::-1]:
-        res += f"- {item['param']}: {item['val']} (-{round(abs(item['diff']), 1)} от среднего)\n"
+    res = f"📝 **Анализ района: {district_name}**\n"
+    
+    if mode in ["all", "positive"]:
+        res += "\n✅ **Сильные стороны:**\n"
+        for item in sorted_data[:3]:
+            if item['is_neg']:
+                res += f"- {item['param']}: {item['val']} (лучше среднего на {round(abs(item['diff']), 1)})\n"
+            else:
+                res += f"- {item['param']}: {item['val']} (+{round(item['diff'], 1)} к среднему)\n"
+                
+    if mode in ["all", "negative"]:
+        res += "\n⚠️ **Зоны роста (недостатки):**\n"
+        for item in sorted_data[-3:][::-1]:
+            if item['is_neg']:
+                res += f"- {item['param']}: {item['val']} (хуже среднего на {round(abs(item['diff']), 1)})\n"
+            else:
+                res += f"- {item['param']}: {item['val']} (-{round(abs(item['diff']), 1)} от среднего)\n"
     return res
 
 with st.sidebar:
@@ -228,23 +250,35 @@ def process_ai_logic(payload):
         if len(dists_to_compare) >= 2:
             res = random.choice(intent['responses']) if intent['tag'] == 'comparison' else "📊 Сравниваю показатели:\n"
             if not found_params:
-                res += "Уточните параметр для детального сравнения (например, 'по газопроводу')."
-            for p_obj in found_params:
-                res += compare_multi_logic(dists_to_compare, p_obj, all_sheets)
+                if any(word in user_query for word in ["плюс", "преимуществ", "лучше", "хорош", "сильные"]):
+                    res += f"\nОсновные преимущества района {dists_to_compare[0]}:\n"
+                    res += analyze_specific(dists_to_compare[0], all_sheets, mode="positive")
+                elif any(word in user_query for word in ["минус", "недостатк", "хуже", "плохо", "отрицательн", "косяк", "проблем"]):
+                    res += f"\nСлабые стороны района {dists_to_compare[0]}:\n"
+                    res += analyze_specific(dists_to_compare[0], all_sheets, mode="negative")
+                else:
+                    res += "Уточните параметр для детального сравнения (например, 'по газопроводу')."
+            else:
+                for p_obj in found_params:
+                    res += compare_multi_logic(dists_to_compare, p_obj, all_sheets)
             return res
 
     target_district = found_dists[0] if found_dists else json_district
 
-    if intent['tag'] == 'advantages' or any(word in user_query for word in ["плюс", "минус", "сторона", "косяк", "проблем"]):
+    if any(word in user_query for word in ["плюс", "преимуществ", "лучше", "хорош", "сильные"]):
+        return analyze_specific(target_district, all_sheets, mode="positive")
+    
+    if any(word in user_query for word in ["минус", "недостатк", "хуже", "плохо", "отрицательн", "косяк", "проблем"]):
+        return analyze_specific(target_district, all_sheets, mode="negative")
+
+    if intent['tag'] == 'advantages':
         if target_district:
-            prefix = random.choice(intent['responses']) if intent['tag'] == 'advantages' else "📝 Анализ:"
-            return f"{prefix}\n\n{analyze_advantages(target_district, all_sheets)}"
+            return analyze_specific(target_district, all_sheets, mode="all")
         return "Укажите район для анализа."
 
     if intent['tag'] == 'improvement' or "улучшить" in user_query:
         if target_district:
-            prefix = random.choice(intent['responses'])
-            return f"{prefix}\n\n{analyze_advantages(target_district, all_sheets)}"
+            return analyze_specific(target_district, all_sheets, mode="negative")
         return "Укажите район."
 
     return f"Я определил район **{target_district}**. Что вы хотите узнать?"
