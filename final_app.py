@@ -17,7 +17,6 @@ st.set_page_config(
 morph = pymorphy3.MorphAnalyzer()
 MAX_LIMIT = 5
 
-# --- ЗАГРУЗКА ДАННЫХ ---
 @st.cache_data
 def load_all_data():
     districts_geo = pd.DataFrame({
@@ -52,7 +51,6 @@ def load_all_data():
         st.error(f"Файл City_Data_Summary.xlsx не найден. Ошибка: {e}")
         sheets, dist_list, params_list = {}, [], []
 
-    # РАСШИРЕННЫЙ СПИСОК ИНТЕНТОВ (ВСТРОЕННЫЙ)
     intents_data = [
         {
             "tag": "greeting",
@@ -79,8 +77,6 @@ def load_all_data():
     return districts_geo, incidents, sheets, dist_list, params_list, intents_data
 
 df_districts, df_incidents, all_sheets, districts_list, parameters, intents = load_all_data()
-
-# --- ЛОГИКА ИИ ---
 
 def normalize_text(text):
     words = text.split()
@@ -167,8 +163,6 @@ def analyze_advantages(district_name, sheets):
         res += f"- {item['param']}: {item['val']} (-{round(abs(item['diff']), 1)} от среднего)\n"
     return res
 
-# --- ИНТЕРФЕЙС STREAMLIT ---
-
 with st.sidebar:
     st.header("⚙️ Параметры анализа")
     w_eco = st.slider("🍀 Экология", 0.1, 1.0, 0.5)
@@ -220,70 +214,89 @@ with tab_det:
         else:
             st.success("Инцидентов нет.")
 
-# --- ИИ-АССИСТЕНТ (ОБНОВЛЕННЫЙ) ---
-
 def process_ai_logic(payload):
     user_query = payload.get("query", "").lower()
     json_district = payload.get("district", "")
 
     found_dists, found_params = extract_entities_multi(user_query, districts_list, parameters)
-    target_district = found_dists[0] if found_dists else json_district
     intent = get_intent(user_query)
 
-    # 1. Плюсы и минусы (интент advantages + ключевые слова)
+    is_comparison_context = any(word in user_query for word in ["перед", "чем", "сравнению", "против"])
+    
+    if is_comparison_context and json_district and found_dists:
+        primary_dist = json_district
+        secondary_dist = found_dists[0]
+        if primary_dist != secondary_dist:
+            res = f"🧐 Сравниваю преимущества **{primary_dist}** перед **{secondary_dist}**:\n"
+            if not found_params:
+                res += analyze_advantages(primary_dist, all_sheets)
+                res += f"\n\nДля сравнения с {secondary_dist} по конкретным цифрам укажите категорию (например, транспорт)."
+            else:
+                for p_obj in found_params:
+                    res += compare_multi_logic([primary_dist, secondary_dist], p_obj, all_sheets)
+            return res
+
+    target_district = found_dists[0] if found_dists else json_district
+
     if intent['tag'] == 'advantages' or any(word in user_query for word in ["плюс", "минус", "сторона", "косяк", "проблем"]):
         if target_district:
             prefix = random.choice(intent['responses']) if intent['tag'] == 'advantages' else "📝 Анализ:"
             return f"{prefix}\n\n{analyze_advantages(target_district, all_sheets)}"
         return "Укажите район для анализа."
 
-    # 2. Улучшение (интент improvement)
     if intent['tag'] == 'improvement' or "улучшить" in user_query:
         if target_district:
             prefix = random.choice(intent['responses'])
-            analysis = analyze_advantages(target_district, all_sheets)
-            return f"{prefix}\n\nЧтобы сделать район **{target_district}** лучше, обратите внимание на следующие показатели:\n\n{analysis}"
-        return "Укажите район, требующий улучшений."
+            return f"{prefix}\n\n{analyze_advantages(target_district, all_sheets)}"
+        return "Укажите район."
 
-    # 3. Сравнение (интент comparison)
     if intent['tag'] == 'comparison' or len(found_dists) >= 2:
-        if len(found_dists) >= 2:
+        dists_to_compare = found_dists if len(found_dists) >= 2 else ([json_district, found_dists[0]] if json_district and found_dists else [])
+        if len(dists_to_compare) >= 2:
             res = random.choice(intent['responses']) + "\n"
             if not found_params:
-                res += "Для точного сравнения укажите параметр (например, 'по экологии')."
-            for p_obj in found_params: 
-                res += compare_multi_logic(found_dists, p_obj, all_sheets)
+                res += "Уточните параметр для детального сравнения (например, 'по экологии')."
+            for p_obj in found_params:
+                res += compare_multi_logic(dists_to_compare, p_obj, all_sheets)
             return res
         return "Для сравнения нужно 2 района."
 
-    # 4. Приветствие
-    if intent['tag'] == 'greeting': 
-        return random.choice(intent['responses'])
-
-    return f"Я определил район **{target_district}**. Попробуйте спросить о его 'плюсах и минусах' или 'как улучшить' ситуацию."
+    return f"Я определил район **{target_district}**. Что вы хотите узнать?"
 
 @st.dialog("Интеллектуальный помощник", width="large")
 def ai_assistant_dialog():
-    if "messages" not in st.session_state: st.session_state.messages = []
-    for msg in st.session_state.messages:
-        with st.chat_message(msg["role"]): st.write(msg["content"])
+    if "messages" not in st.session_state:
+        st.session_state.messages = []
 
-    with st.container(border=True):
-        c1, c2 = st.columns(2)
-        dist = c1.selectbox("Район контекста", df_districts['Район'], key="ai_dist")
-        cat = c2.selectbox("Тема", ["Экология", "Транспорт", "Безопасность"], key="ai_cat")
+    chat_boundary = st.container(height=500)
+
+    with chat_boundary:
+        for msg in st.session_state.messages:
+            with st.chat_message(msg["role"]):
+                st.write(msg["content"])
+
+    with st.container():
+        st.divider()
+        col1, col2 = st.columns(2)
+        dist = col1.selectbox("Район контекста", df_districts['Район'], key="ai_dist_dialog")
+        cat = col2.selectbox("Тема", ["Экология", "Транспорт", "Безопасность"], key="ai_cat_dialog")
+        
         user_input = st.chat_input("Спросите о районах...")
 
     if user_input:
-        st.session_state.messages.append({"role": "user", "content": user_input})
-        with st.chat_message("user"): st.write(user_input)
-
+        with chat_boundary:
+            with st.chat_message("user"):
+                st.write(user_input)
+        
         payload = {"district": dist, "query": user_input}
-        with st.chat_message("assistant"):
-            with st.spinner("Анализирую данные..."):
-                response_text = process_ai_logic(payload)
+        response_text = process_ai_logic(payload)
+        
+        with chat_boundary:
+            with st.chat_message("assistant"):
                 st.write(response_text)
-                st.session_state.messages.append({"role": "assistant", "content": response_text})
+        
+        st.session_state.messages.append({"role": "user", "content": user_input})
+        st.session_state.messages.append({"role": "assistant", "content": response_text})
 
 with st.sidebar:
     st.divider()
