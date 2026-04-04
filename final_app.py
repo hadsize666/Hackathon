@@ -314,10 +314,40 @@ def process_ai_logic(payload):
     found_dists, found_params = extract_entities_multi(user_query, districts_list, parameters)
     intent = get_intent(user_query)
 
+    metric_word = None
+    if "безопасн" in user_query: metric_word = "Безопасность"
+    elif "эколог" in user_query or "чист" in user_query: metric_word = "Экология"
+    elif "транспорт" in user_query or "пробк" in user_query or "автобус" in user_query: metric_word = "Транспорт"
+    elif "освещен" in user_query or "свет" in user_query: metric_word = "Освещение"
+
+    if metric_word and not found_params:
+        is_global = any(word in user_query for word in ["самый", "самая", "лучший", "всего", "больше", "максимальн", "где"])
+        
+        if is_global and len(found_dists) < 2 and "или" not in user_query:
+            best_row = df_districts.loc[df_districts[metric_word].idxmax()]
+            return f"🏆 Самый высокий показатель «{metric_word}» имеет **{best_row['Район']}** район (оценка: {best_row[metric_word]} из 100)."
+        
+        dists_to_compare = found_dists if len(found_dists) >= 2 else ([json_district, found_dists[0]] if json_district and found_dists and json_district != found_dists[0] else [])
+        if len(dists_to_compare) >= 2:
+            dist1, dist2 = dists_to_compare[0], dists_to_compare[1]
+            val1 = df_districts[df_districts['Район'] == dist1][metric_word].values[0]
+            val2 = df_districts[df_districts['Район'] == dist2][metric_word].values[0]
+            if val1 > val2:
+                return f"🛡️ По показателю «{metric_word}» **{dist1}** ({val1}/100) обходит **{dist2}** ({val2}/100). Разница: {round(val1 - val2, 1)} бал."
+            elif val2 > val1:
+                return f"🛡️ По показателю «{metric_word}» **{dist2}** ({val2}/100) обходит **{dist1}** ({val1}/100). Разница: {round(val2 - val1, 1)} бал."
+            else:
+                return f"⚖️ По показателю «{metric_word}» районы равны (оба имеют {val1}/100)."
+                
+        target = found_dists[0] if found_dists else json_district
+        if target:
+            val = df_districts[df_districts['Район'] == target][metric_word].values[0]
+            return f"📊 Оценка по показателю «{metric_word}» для района **{target}**: {val} из 100."
+
     pos_words = ["плюс", "преимуществ", "сильн", "положительн", "достоинств", "хорош", "лучше", "превосход", "обход", "выигрыва"]
     neg_words = ["минус", "недостатк", "хуже", "плох", "отрицательн", "косяк", "проблем", "слаб", "улучш", "рекомендац", "уступа", "проигрыва", "отстает"]
 
-    is_comparison_context = any(word in user_query for word in ["перед", "чем", "сравнению", "против", "сравни"])
+    is_comparison_context = any(word in user_query for word in ["перед", "чем", "сравнению", "против", "сравни", "или"])
     
     if is_comparison_context or intent['tag'] == 'comparison' or len(found_dists) >= 2:
         dists_to_compare = found_dists if len(found_dists) >= 2 else ([json_district, found_dists[0]] if json_district and found_dists else [])
