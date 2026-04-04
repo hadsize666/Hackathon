@@ -320,7 +320,7 @@ def process_ai_logic(payload):
     elif "транспорт" in user_query or "пробк" in user_query or "автобус" in user_query: metric_word = "Транспорт"
     elif "освещен" in user_query or "свет" in user_query: metric_word = "Освещение"
 
-    if metric_word and not found_params:
+    if metric_word:
         is_global = any(word in user_query for word in ["самый", "самая", "лучший", "всего", "больше", "максимальн", "где"])
         
         if is_global and len(found_dists) < 2 and "или" not in user_query:
